@@ -1,18 +1,3 @@
-#include <OSCMessage.h>
-
-/*
-Make an OSC message and send it over serial
- */
-
-#ifdef BOARD_HAS_USB_SERIAL
-#include <SLIPEncodedUSBSerial.h>
-SLIPEncodedUSBSerial SLIPSerial( thisBoardsSerialUSB );
-#else
-#include <SLIPEncodedSerial.h>
- SLIPEncodedSerial SLIPSerial(Serial);
-#endif
-
-
 /* Knock Sensor
 created 29 Feb 2016
 by Diego Di Carlo and Jorge Madrid Portillo
@@ -20,58 +5,131 @@ modified 29 Feb 2016
 by Diego Di Carlo
 */
 
-// these constants won't change:
-const int piezoPinA1 = A1;
-const int piezoPinA2 = A2;
-const int piezoPinA3 = A3;
+const int channel = 1;
 
-const int softPotPin = A0;
+/** CONSTANT **/
+// sensors
+const int PIN_SOFTPOT = A5;
+const int PIN_PIEZO_STRING = A0;
 
-// these variables will change:
-int sensorValueA0 = 0;
-int sensorValueA1 = 0;
-int sensorValueA2 = 0;
-int sensorValueA3 = 0;
+int PIEZO_THRESHOLD_ON = 500;
+int PIEZO_SAMPLES = 400;
+int SOFTPOT_THRESHOLD_ON = 20;
 
-int piezoThr = 500;
-int softPotThr = 813;
+// midi
+const int MIDI_CHANNEL = 0;
 
+/** GLOBAL VARIABLES **/
+int piezoVal = 0;
+int piezoMinVelocity = 10;
+
+int softpotVal = 0;
+boolean softpotActived = false;
+int calibrationMin = 0;
+int calibrationMax = 1023;
+int stringPlucked = false;
+
+/** SET UP **/
 void setup() {
 
-    //enable pullup resistor
-    digitalWrite(softPotPin, HIGH); // to avoid open-circuit interference
-    
-    //begin SLIPSerial just like Serial
-    SLIPSerial.begin(9600);   // set this as high as you can reliably run on your platform
-    #if ARDUINO >= 100
-      while(!Serial)
-      ; //Leonardo "feature"
-    #endif
+    /* load setup data */
+    //read fret definition from EEPROM
+    //TO DO
+
+    /* pin function declaration */
+    pinMode(PIN_SOFTPOT, INPUT);
+    pinMode(PIN_PIEZO_STRING, INPUT);
+
+    /* calibration */
+    //TO DO
 }
 
-
+/** MAIN LOOP **/
 void loop() {
-  
-    // read the sensor and store it in the variable sensorReading:
-    sensorValueA0 = analogRead(softPotPin);
-    if (sensorValueA0 <= softPotThr){
-      Serial.println(sensorValueA0);
-    }
-    
-    sensorValueA1 = analogRead(piezoPinA1); 
-    if (sensorValueA1 >= piezoThr){
-      Serial.write("/piezo/01 \n");
-    }
 
-    sensorValueA2 = analogRead(piezoPinA2);
-    if (sensorValueA2 >= piezoThr){
-      SLIPSerial.println("Piezo 2 " + String(sensorValueA2));
-    }
+    /* reset */
+    piezoVal = false;
+    stringPlucked = false;
 
-    sensorValueA3 = analogRead(piezoPinA3);
-    if (sensorValueA3 >= piezoThr){
-      //SLIPSerial.println("Piezo 3 " + String(sensorValueA3));
-    }
+    /* read values of all sensors */
+    readSensors();
     
-    delay(50);
+    /* continuos or discrete string */
+    // TO DO
+    // using the softpot as a fretted strin
+
+    /* send note on */
+    sendNote();
+
+    /* send note off and reset necessary things */
+    cleanUp();
+    
+    /* check for control changes */
+    //TO DO
+
+    //wait??
+    delay(500);
 }
+
+
+/** FUNCTIONS **/
+void readSensors() {
+
+  /* Piezo */
+  int piezoVal = analogRead(PIN_PIEZO_STRING);
+
+  //if the value breaks the threshold read for max amplitude
+  if (piezoVal > PIEZO_THRESHOLD_ON) {
+    int highestPiezoVal = piezoVal;
+    for (int sample=0; sample < PIEZO_SAMPLES; sample++) {
+      piezoVal = analogRead(PIN_PIEZO_STRING);
+      if (piezoVal > highestPiezoVal) {
+        highestPiezoVal = piezoVal;
+      }
+    }
+    piezoVal = highestPiezoVal;
+  }
+  piezoVal = map(piezoVal, 0, 500, 0, 127);         // adapt the analog value to the midi range
+  piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
+  
+  /* Softpot */
+  softpotVal = analogRead(PIN_SOFTPOT);
+
+  //if the string is touched
+  if (softpotVal > SOFTPOT_THRESHOLD_ON) {
+    softpotActived = true;      
+    softpotVal = map(softpotVal, calibrationMin, calibrationMax, 0, 255);
+    softpotVal = constrain(softpotVal, 0, 255);
+  } else {
+    softpotActived = false;
+    return;
+  }
+}
+
+void sendNote() {
+  // TO DO: if the piezo was hit, play the note
+  if (softpotActived){
+    noteOn(softpotVal, 100);
+    softpotActived = false;
+  }
+  else return;
+}
+
+void  cleanUp() {
+  //turn off the active note
+  if (!softpotActived){ 
+    noteOff(softpotVal, 0);
+  } else return;
+}
+
+/* MIDI functions */
+void noteOn(int pitch, int velocity){
+    usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+    Serial.println(">>>ON!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
+}
+
+void noteOff(int pitch, int velocity){
+    usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+    Serial.println(">>>OFF!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
+}
+
