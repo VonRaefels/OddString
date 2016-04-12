@@ -1,20 +1,20 @@
-/* Knock Sensor
-created 29 Feb 2016
-by Diego Di Carlo and Jorge Madrid Portillo
-modified 29 Feb 2016
-by Diego Di Carlo
+/* 
+* OddString
+* ---------
+* by Diego Di Carlo and Jorge Madrid Portillo
+* created 29 Feb 2016
 */
-
-const int channel = 1;
 
 /** CONSTANT **/
 // sensors
-const int PIN_SOFTPOT = A5;
+const int channel = 1;
+
+const int PIN_SOFTPOT = A6;
 const int PIN_PIEZO_STRING = A0;
 
-int PIEZO_THRESHOLD_ON = 500;
+int PIEZO_THRESHOLD_ON = 0;
 int PIEZO_SAMPLES = 400;
-int SOFTPOT_THRESHOLD_ON = 20;
+int SOFTPOT_THRESHOLD_ON = 0;
 
 // midi
 const int MIDI_CHANNEL = 0;
@@ -37,8 +37,11 @@ void setup() {
     //TO DO
 
     /* pin function declaration */
+    //begin at MIDI spec baud rate
+    Serial.begin(31250);
     pinMode(PIN_SOFTPOT, INPUT);
     pinMode(PIN_PIEZO_STRING, INPUT);
+//    digitalWrite(PIN_SOFTPOT, HIGH);
 
     /* calibration */
     //TO DO
@@ -59,10 +62,10 @@ void loop() {
     // using the softpot as a fretted strin
 
     /* send note on */
-    sendNote();
+//    sendNote();
 
     /* send note off and reset necessary things */
-    cleanUp();
+//    cleanUp();
     
     /* check for control changes */
     //TO DO
@@ -89,8 +92,9 @@ void readSensors() {
     }
     piezoVal = highestPiezoVal;
   }
-  piezoVal = map(piezoVal, 0, 500, 0, 127);         // adapt the analog value to the midi range
-  piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
+  Serial.println("Piezo Val:  " + String(piezoVal));
+//  piezoVal = map(piezoVal, 0, 500, 0, 127);         // adapt the analog value to the midi range
+//  piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
   
   /* Softpot */
   softpotVal = analogRead(PIN_SOFTPOT);
@@ -98,8 +102,9 @@ void readSensors() {
   //if the string is touched
   if (softpotVal > SOFTPOT_THRESHOLD_ON) {
     softpotActived = true;      
-    softpotVal = map(softpotVal, calibrationMin, calibrationMax, 0, 255);
-    softpotVal = constrain(softpotVal, 0, 255);
+//    softpotVal = map(softpotVal, calibrationMin, calibrationMax, 0, 255);
+//    softpotVal = constrain(softpotVal, 0, 255);
+      Serial.println("SoftPot Val:  " + String(softpotVal));
   } else {
     softpotActived = false;
     return;
@@ -108,7 +113,7 @@ void readSensors() {
 
 void sendNote() {
   // TO DO: if the piezo was hit, play the note
-  if (softpotActived){
+  if (softpotActived) {
     noteOn(softpotVal, 100);
     softpotActived = false;
   }
@@ -123,12 +128,12 @@ void  cleanUp() {
 }
 
 /* MIDI functions */
-void noteOn(int pitch, int velocity){
+void noteOn(int pitch, int velocity) {
     usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
     Serial.println(">>>ON!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
 
-void noteOff(int pitch, int velocity){
+void noteOff(int pitch, int velocity) {
     usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
     Serial.println(">>>OFF!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
