@@ -64,7 +64,7 @@ const int PIN_LED_GREEN = 7;
 const int PIN_LED_RED = 8;
 
 // sensors proprieties
-int PIEZO_THRESHOLD_ON = 150;
+int PIEZO_THRESHOLD_ON = 250;
 int PIEZO_SAMPLES = 400;
 
 int MIDI_CHANNEL = 0x94;
@@ -76,7 +76,8 @@ int SOFTPOT_THRESHOLD_ON = 7;
 const int nPiezos = 2;
 int piezoPins[nPiezos] = {PIN_PIEZO_THUMB, PIN_PIEZO_INDEX};
 int piezoCalibration[nPiezos];
-int piezoVals[nPiezos] = {0, 0};  // state of the pad 1 for touched, 0 for not
+int piezoVal; // state of the pad 1 for touched, 0 for not
+int rawPiezoVal = 0;
 int piezoVelocity[nPiezos];      // state of the pad as it is processed:
 // 0 = read for new touch
 // 1 = have touch, waiting for volume
@@ -103,17 +104,22 @@ int calibrationMin = 0;
 int calibrationMax = 1023;
 int calibrationZ = 0;
 
-int fretDefs[22];
+int numFrets = 12;
+int fretDefs[13];
 int F0 = 220;
 
 /* DEBUG */
 boolean debugFrets = false;
-boolean debugSoftPot = true;
+boolean debugSoftPot = false;
 boolean debugPiezo = false;
+boolean debugPiezo2 = false;
 boolean isCalibrating = false;
+boolean debugPickNotes = false;
 
 // the played note (usefull for open-string note)
 Note *activeNote;
+boolean stringActive = false;
+boolean stringPlucked = false;
 
 // midi proprieties
 byte channel = 0x94; // arbitrary MIDI channel -- change as desired
@@ -132,21 +138,25 @@ void setup() {
   pinMode(PIN_LED_GREEN, OUTPUT);
   // mode
   pinMode(PIN_PIEZO_MODE, INPUT);
+  digitalWrite(PIN_PIEZO_MODE, HIGH);
   // piezos
   pinMode(PIN_PIEZO_INDEX, INPUT);
+  digitalWrite(PIN_PIEZO_INDEX, HIGH);
   pinMode(PIN_PIEZO_THUMB, INPUT);
+  digitalWrite(PIN_PIEZO_THUMB, HIGH);
+  
   // softpot
   pinMode(PIN_SOFTPOT, INPUT);
 
   /* load setup data */
   //read fret definition from EEPROM
   fretDefs[0] = F0;
-  for (int j = 1; j < 21; j++) {
-    fretDefs[j] = EEPROM.read(j + (21));
+  for (int j = 1; j < numFrets; j++) {
+    fretDefs[j] = EEPROM.read(j);
     Serial.println(String(fretDefs[j]));
   }
-  fretDefs[21] = 0;
-  calibrationMin = EEPROM.read(21 + (21));
+  fretDefs[numFrets] = 0;
+  calibrationMin = EEPROM.read(numFrets);
 
   /* calibration */
   if(isCalibrating) {
@@ -164,6 +174,11 @@ void loop() {
     return;
   }
 
+  /* RESET */
+  stringPlucked = false;
+  piezoVal = false;
+  //rawPiezoVal = 0;
+
   readSensors();
 
   if (doesSoftpotActAsString) {
@@ -172,9 +187,9 @@ void loop() {
       Serial.println("Fret touched: " + String(fretTouched));
     }
 
-    //sendNote();
+    pickNotes();
 
-    //cleanUp();
+    cleanUp();
   } else {
     int val = map(softpotVal, 0, 255, 8192, 16383);
     pitchBend(val);
@@ -190,10 +205,11 @@ void loop() {
 void readSensors() {
   /* Accelerometer */
   int accelVal = analogRead(PIN_ACCEL_Z) - calibrationZ;
-  Serial.println("acceleration z:  " + String(accelVal));
+  //Serial.println("acceleration z:  " + String(accelVal));
   
   /* Piezo */
-  int piezoVal = analogRead(PIN_PIEZO_INDEX);
+  int m = micros();
+  piezoVal = analogRead(PIN_PIEZO_INDEX);
 
   //if the value breaks the threshold read for max amplitude
   if (piezoVal > PIEZO_THRESHOLD_ON) {
@@ -203,14 +219,20 @@ void readSensors() {
       if (piezoVal > highestPiezoVal) {
         highestPiezoVal = piezoVal;
       }
+      if(debugPiezo2) {
+        Serial.println(String(piezoVal) + ", " + rawPiezoVal);
+      }
+      
     }
     piezoVal = highestPiezoVal;
+    rawPiezoVal = piezoVal;
     if(debugPiezo) {
-      Serial.println("Piezo Val:  " + String(piezoVal));
+      Serial.println(String(piezoVal));
     }
   }
+  Serial.println(micros() - m);
 
-  piezoVal = map(piezoVal, 0, 500, 0, 127);         // adapt the analog value to the midi range
+  piezoVal = map(piezoVal, PIEZO_THRESHOLD_ON, 1023, 0, 127);         // adapt the analog value to the midi range
   piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
 
   /* Softpot */
@@ -260,13 +282,7 @@ void sendNote() {
   else return;
 }
 
-void  cleanUp() {
-  //turn off the active note
-  if (!softpotActive) {
-    noteOff(softpotVal, 0);
-  } else return;
-}
-
+const int CALIBRATE_PIEZO_THRESHOLD = 800;
 void calibrate() {
   Serial.println("Activating leds..");
   digitalWrite(PIN_LED_BLUE, HIGH);
@@ -285,7 +301,7 @@ void calibrate() {
 
   //loop through the array of fret definitions
   Serial.println("Entering calibration...");
-  for (int j = 21; j > 0; j--) {
+  for (int j = numFrets; j > 0; j--) {
 
     int response = false;
 
@@ -296,12 +312,12 @@ void calibrate() {
       int piezoVal = analogRead(piezoPins[0]);
 
       //get the sensor min value (highest fret) on the first round
-      if (j == 21) {
+      if (j == numFrets) {
         //        int fretVal = analogRead(PIN_SOFTPOT);
         //        if (fretVal > sensorMax) (sensorMax = fretVal);
 
         //if the piezo is hit, register this as the definition for this fret
-        if (piezoVal > PIEZO_THRESHOLD_ON) {
+        if (piezoVal > CALIBRATE_PIEZO_THRESHOLD) {
           int fretVal = analogRead(PIN_SOFTPOT);
           sensorMin = fretVal;
           val = fretVal;
@@ -311,7 +327,7 @@ void calibrate() {
       }
 
       else {
-        if (piezoVal > PIEZO_THRESHOLD_ON) {
+        if (piezoVal > CALIBRATE_PIEZO_THRESHOLD) {
           int fretVal = analogRead(PIN_SOFTPOT);
           fretVal = map(fretVal, sensorMin, sensorMax, 0, 255);
           fretVal = constrain(fretVal, 0, 255);
@@ -324,17 +340,17 @@ void calibrate() {
 
     //write to memory
     digitalWrite(PIN_LED_BLUE, LOW);
-    EEPROM.write(j + (21), val);
+    EEPROM.write(j, val);
 
     delay(100);
     digitalWrite(PIN_LED_BLUE, HIGH);
   }
 
   //update global definitions
-  calibrationMin = EEPROM.read(21 + (21));
+  calibrationMin = EEPROM.read(numFrets);
 
-  for (int j = 1; j < 21; j++) {
-    fretDefs[j] = EEPROM.read(j + (21));
+  for (int j = 1; j < numFrets; j++) {
+    fretDefs[j] = EEPROM.read(j);
   }
 
   digitalWrite(PIN_LED_BLUE, LOW);
@@ -348,7 +364,7 @@ void determineFrets() {
   }
 
   //loop through the array of fret definitions
-  for (int j = 1; j < 21; j++) {
+  for (int j = 1; j < numFrets; j++) {
 
     int k = j - 1;
     if (softpotVal <= fretDefs[k] &&
@@ -360,12 +376,63 @@ void determineFrets() {
     }
   }
 
-  if (softpotVal <= fretDefs[20]) {
+  if (softpotVal <= fretDefs[numFrets - 1]) {
     softpotValOld = softpotVal;
-    fretTouched = 21;
+    fretTouched = numFrets;
   }
 }
 
+void pickNotes() {
+  //if the piezo was hit, play the fretted note
+  if (rawPiezoVal > 1000){
+    noteFretted = fretTouched;
+    if (stringActive){
+      if(debugPickNotes) {
+        Serial.println("Deactivating String: " + String(activeNote->number()));
+      }
+      noteOff(activeNote->number(), 0);
+      free(activeNote);
+    }else {
+      stringActive = true;
+    }
+    //register with active notes
+    activeNote = (Note *) malloc(sizeof(Note));
+    activeNote->init(noteFretted, piezoVal, millis(), fretTouched > 0);
+    if(debugPickNotes) {
+      Serial.println("Activating String: " + String(activeNote->number()));
+    }
+
+    noteOn(activeNote->number(), activeNote->velocity());
+  
+    stringPlucked = true; 
+  }
+}
+
+
+void cleanUp() {
+  if (!fretTouched && stringActive){
+    
+    //if open string
+    if (!activeNote->fretted()) {
+//      if (activeNotes->timeActive() > minDurationOpen) {
+//        //turn off the active note
+//        noteOff(0x80, activeNotes->number(), 0);
+//    
+//        //mark as inactive
+//        stringActive = false;
+//        free(activeNotes);
+//      }
+    }
+   else { 
+    //turn off the active note
+    noteOff(activeNote->number(), 0);
+    
+    //mark as inactive
+    stringActive = false;
+    free(activeNote);
+   }
+  }
+}
 
 /* MIDI functions */
 void noteOn(int pitch, int velocity) {
