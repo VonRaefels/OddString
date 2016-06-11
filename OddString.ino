@@ -111,7 +111,7 @@ double xAvarage;
 double xAvaragePrev;
 double xAvaragePrevPrev;
 double xDetected;
-const double FIXED_THR_DELTA = 10;
+const double FIXED_THR_DELTA = 300;
 const double ADAPT_THR_LAMBDA = 1;
 double detectedPrev;
 double detectedPrevPrev;
@@ -144,7 +144,7 @@ boolean debugPiezo = false;
 boolean debugPiezo2 = true;
 boolean isCalibrating = false;
 boolean debugPickNotes = false;
-boolean debugTime = true;
+boolean debugTime = false;
 
 // the played note (usefull for open-string note)
 Note *activeNote;
@@ -244,15 +244,18 @@ void readSensors() {
   int m = micros();
 
   // Collect the raw data and perform zeropadding
-  for (int i = 0; i < nWindow; i++) {
-    frame[i] = analogRead(PIN_PIEZO_INDEX);
+  for (int i = 0; i < nWindow*2; i++) {
+    if (i > nWindow - 1) {
+      frame[i] = 0;
+    } else {
+      frame[i] = analogRead(PIN_PIEZO_INDEX);
+    }
   }
   if (debugTime) {
     Serial.println(micros() - m);
   }
-  Serial.println("FFT computing");
-  fft(frame, nFFT);
-  Serial.println("FFT done");
+  
+  fft(frame, nWindow);
     
   // ENERGY
   double xEnergy = 0;
