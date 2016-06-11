@@ -1,21 +1,25 @@
 /*
-* OddString
-* ---------
-* by Diego Di Carlo and Jorge Madrid Portillo
-* created 29 Feb 2016
+  OddString
+  ---------
+  by Diego Di Carlo and Jorge Madrid Portillo
+  created 29 Feb 2016
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <EEPROM.h>
+#include <math.h>
+
 
 #define PADDING 3
+
+
 //** NOTE CLASS **//
 /*
-* A note class that stores some info about each note played is necessary
-* to ensure that open strings are held for the specified amount of time.
-* That is a problem with using the piezos as triggers instead of FSRs, they
-* only register momentary impact or vibration, creating a problem for open strings.
+  A note class that stores some info about each note played is necessary
+  to ensure that open strings are held for the specified amount of time.
+  That is a problem with using the piezos as triggers instead of FSRs, they
+  only register momentary impact or vibration, creating a problem for open strings.
 */
 
 class Note {
@@ -76,7 +80,9 @@ int SOFTPOT_THRESHOLD_ON = 7;
 const int nPiezos = 2;
 int piezoPins[nPiezos] = {PIN_PIEZO_THUMB, PIN_PIEZO_INDEX};
 int piezoCalibration[nPiezos];
-int piezoVal; // state of the pad 1 for touched, 0 for not
+int piezoVal;       // x[n] state of the pad 1 for touched, 0 for not
+int oldPiezoVal;    // x[n-1] used for onset detection
+int oldOldPiezoVal; // x[n-2] used for onset detection
 int rawPiezoVal = 0;
 int piezoVelocity[nPiezos];      // state of the pad as it is processed:
 // 0 = read for new touch
@@ -92,6 +98,29 @@ byte padIndex = 0;  // index for pads throught each loop
 boolean softpotActive = true;
 boolean doesSoftpotActAsString = true;
 int piezoMinVelocity = 0;
+
+// DSP VARIABLE
+
+const int FS = 31250;
+const uint16_t nFFT = 128;
+const uint16_t nWindow = nFFT/2;
+double frame[2*nWindow];
+double vFFT[nFFT];
+double xEnergy;
+double xAvarage;
+double xAvaragePrev;
+double xAvaragePrevPrev;
+double xDetected;
+const double FIXED_THR_DELTA = 10;
+const double ADAPT_THR_LAMBDA = 1;
+double detectedPrev;
+double detectedPrevPrev;
+double xThresh;
+double xLocMax;
+double xLocMaxPrev;
+double xLocMaxPrevPrev;
+
+
 
 /* FRETS AND CALIBRATION VARIABLES */
 int softpotVal = 0;
@@ -112,9 +141,10 @@ int F0 = 220;
 boolean debugFrets = false;
 boolean debugSoftPot = false;
 boolean debugPiezo = false;
-boolean debugPiezo2 = false;
+boolean debugPiezo2 = true;
 boolean isCalibrating = false;
 boolean debugPickNotes = false;
+boolean debugTime = true;
 
 // the played note (usefull for open-string note)
 Note *activeNote;
@@ -144,9 +174,12 @@ void setup() {
   digitalWrite(PIN_PIEZO_INDEX, HIGH);
   pinMode(PIN_PIEZO_THUMB, INPUT);
   digitalWrite(PIN_PIEZO_THUMB, HIGH);
-  
+
   // softpot
   pinMode(PIN_SOFTPOT, INPUT);
+
+  /* DSP */
+ 
 
   /* load setup data */
   //read fret definition from EEPROM
@@ -159,18 +192,18 @@ void setup() {
   calibrationMin = EEPROM.read(numFrets);
 
   /* calibration */
-  if(isCalibrating) {
+  if (isCalibrating) {
     calibrate();
   }
 
-  for (int x=0; x<2; x++) {
+  for (int x = 0; x < 2; x++) {
     calibrationZ = analogRead(PIN_ACCEL_Z);
   }
 }
 
 /** MAIN LOOP **/
 void loop() {
-  if(isCalibrating) {
+  if (isCalibrating) {
     return;
   }
 
@@ -204,33 +237,52 @@ void loop() {
 /** FUNCTIONS **/
 void readSensors() {
   /* Accelerometer */
-  int accelVal = analogRead(PIN_ACCEL_Z) - calibrationZ;
+  //int accelVal = analogRead(PIN_ACCEL_Z) - calibrationZ;
   //Serial.println("acceleration z:  " + String(accelVal));
-  
+
   /* Piezo */
   int m = micros();
-  piezoVal = analogRead(PIN_PIEZO_INDEX);
 
-  //if the value breaks the threshold read for max amplitude
-  if (piezoVal > PIEZO_THRESHOLD_ON) {
-    int highestPiezoVal = piezoVal;
-    for (int sample = 0; sample < PIEZO_SAMPLES; sample++) {
-      piezoVal = analogRead(PIN_PIEZO_INDEX);
-      if (piezoVal > highestPiezoVal) {
-        highestPiezoVal = piezoVal;
-      }
-      if(debugPiezo2) {
-        Serial.println(String(piezoVal) + ", " + rawPiezoVal);
-      }
-      
-    }
-    piezoVal = highestPiezoVal;
-    rawPiezoVal = piezoVal;
-    if(debugPiezo) {
-      Serial.println(String(piezoVal));
-    }
+  // Collect the raw data and perform zeropadding
+  for (int i = 0; i < nWindow; i++) {
+    frame[i] = analogRead(PIN_PIEZO_INDEX);
   }
-  Serial.println(micros() - m);
+  if (debugTime) {
+    Serial.println(micros() - m);
+  }
+  Serial.println("FFT computing");
+  fft(frame, nFFT);
+  Serial.println("FFT done");
+    
+  // ENERGY
+  double xEnergy = 0;
+  for (int i = 0; i < 2*nWindow; i += 2) {
+    xEnergy += (pow(frame[i], 2) + pow(frame[i+1], 2))/FS;
+  }
+
+  // MOVING AVARAGE
+  xAvarage = (xEnergy + xAvaragePrev + xAvaragePrevPrev)/3;
+  xAvaragePrevPrev = xAvaragePrev;
+  xAvaragePrev = xAvarage;
+
+  // ADAPTIVE THRESHOLDING
+  xDetected = FIXED_THR_DELTA + ADAPT_THR_LAMBDA*(xAvarage + detectedPrev + detectedPrevPrev)/3;
+  detectedPrevPrev = detectedPrev;
+  detectedPrev = xDetected;
+
+  xThresh = xAvarage - xDetected;
+
+  if (xThresh < 0){
+    xThresh = 0;
+  }
+
+  Serial.println(String(piezoVal) + ", " + String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected));
+
+  xLocMax = xThresh;
+
+  if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
+    piezoVal = xLocMaxPrev;
+  }
 
   piezoVal = map(piezoVal, PIEZO_THRESHOLD_ON, 1023, 0, 127);         // adapt the analog value to the midi range
   piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
@@ -266,6 +318,8 @@ void readSensors() {
     softpotVal = 0;
     return;
   }
+
+
 }
 
 int cmpfunc (const void * a, const void * b)
@@ -274,7 +328,6 @@ int cmpfunc (const void * a, const void * b)
 }
 
 void sendNote() {
-  // TO DO: if the piezo was hit, play the note
   if (softpotActive) {
     noteOn(softpotVal, 100);
     softpotActive = false;
@@ -384,69 +437,216 @@ void determineFrets() {
 
 void pickNotes() {
   //if the piezo was hit, play the fretted note
-  if (rawPiezoVal > 1000){
+  if (rawPiezoVal > 1000) {
     noteFretted = fretTouched;
-    if (stringActive){
-      if(debugPickNotes) {
+    if (stringActive) {
+      if (debugPickNotes) {
         Serial.println("Deactivating String: " + String(activeNote->number()));
       }
       noteOff(activeNote->number(), 0);
       free(activeNote);
-    }else {
+    } else {
       stringActive = true;
     }
     //register with active notes
     activeNote = (Note *) malloc(sizeof(Note));
     activeNote->init(noteFretted, piezoVal, millis(), fretTouched > 0);
-    if(debugPickNotes) {
+    if (debugPickNotes) {
       Serial.println("Activating String: " + String(activeNote->number()));
     }
 
     noteOn(activeNote->number(), activeNote->velocity());
-  
-    stringPlucked = true; 
+
+    stringPlucked = true;
   }
 }
 
 
 void cleanUp() {
-  if (!fretTouched && stringActive){
-    
+  if (!fretTouched && stringActive) {
+
     //if open string
     if (!activeNote->fretted()) {
-//      if (activeNotes->timeActive() > minDurationOpen) {
-//        //turn off the active note
-//        noteOff(0x80, activeNotes->number(), 0);
-//    
-//        //mark as inactive
-//        stringActive = false;
-//        free(activeNotes);
-//      }
+      //      if (activeNotes->timeActive() > minDurationOpen) {
+      //        //turn off the active note
+      //        noteOff(0x80, activeNotes->number(), 0);
+      //
+      //        //mark as inactive
+      //        stringActive = false;
+      //        free(activeNotes);
+      //      }
     }
-   else { 
-    //turn off the active note
-    noteOff(activeNote->number(), 0);
-    
-    //mark as inactive
-    stringActive = false;
-    free(activeNote);
-   }
+    else {
+      //turn off the active note
+      noteOff(activeNote->number(), 0);
+
+      //mark as inactive
+      stringActive = false;
+      free(activeNote);
+    }
   }
 }
 
 /* MIDI functions */
 void noteOn(int pitch, int velocity) {
-  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+  //  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
   //Serial.println(">>>ON!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
 
 void noteOff(int pitch, int velocity) {
-  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+  //  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
   //Serial.println(">>>OFF!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
 
 void pitchBend(int value) {
-  usbMIDI.sendPitchBend(value, MIDI_CHANNEL);
+  //  usbMIDI.sendPitchBend(value, MIDI_CHANNEL);
 }
 
+
+// FFT ROUTINE
+
+#define SWAP(a,b) tempr = (a); (a) = (b); (b) = tempr
+
+// Input: nn is the number of points in the data and in the FFT, 
+//           nn must be a power of 2
+// Input: data is sampled voltage v(0),0,v(1),0,v(2),...v(nn-1),0 versus time
+// Output: data is complex FFT Re[V(0)],Im[V(0)], Re[V(1)],Im[V(1)],...
+// data is an array of 2*nn elements
+void fft(double data[], unsigned long nn){
+unsigned long n,mmax,m,j,istep,i;
+double wtemp,wr,wpr,wpi,wi,theta;
+double tempr,tempi;
+  n = nn<<1;  // n is the size of data array (2*nn)
+  j = 1;
+  for(i=1; i<n; i+=2){
+    if(j > i){        // bit reversal section
+      SWAP(data[j-1],data[i-1]);
+      SWAP(data[j],data[i]);
+    }
+    m = n>>1;
+    while((m >= 2)&&(j > m)){
+      j = j-m;
+      m = m>>1;
+    }
+    j = j+m;
+  }
+  mmax = 2;             // Danielson-Lanczos section
+  while( n > mmax){     // executed log2(nn) times
+    istep = mmax<<1;
+    theta = -6.283185307179586476925286766559/mmax;
+    // the above line should be + for inverse FFT
+    wtemp = sin(0.5*theta);
+    wpr = -2.0*wtemp*wtemp;  // real part
+    wpi = sin(theta);        // imaginary part
+    wr = 1.0;
+    wi = 0.0;
+    for(m=1; m<mmax; m+=2){
+      for(i=m; i<=n; i=i+istep){
+        j = i+mmax;
+        tempr     = wr*data[j-1]-wi*data[j]; // Danielson-Lanczos formula
+        tempi     = wr*data[j]+wi*data[j-1];
+        data[j-1] = data[i-1]-tempr;
+        data[j]   = data[i]-tempi;
+        data[i-1] = data[i-1]+tempr;
+        data[i]   = data[i]+tempi;
+      }
+      wtemp = wr;
+      wr = wr*wpr-wi*wpi+wr;
+      wi = wi*wpr+wtemp*wpi+wi;
+    }
+    mmax = istep;
+  }
+}
+
+//-----------------------------------------------------------
+// Calculates the FFT magnitude at a given frequency index. 
+// Input: data is complex FFT Re[V(0)],Im[V(0)], Re[V(1)],Im[V(1)],...
+// Input: nn is the number of points in the data and in the FFT, 
+//           nn must be a power of 2
+// Input: k is frequency index 0 to nn/2-1
+//        E.g., if nn=16384, then k can be 0 to 8191
+// Output: Magnitude in volts at this frequency (volts)
+// data is an array of 2*nn elements
+// returns 0 if k >= nn/2
+double fftMagnitude(double data[], unsigned long nn, unsigned long k){
+  double nr, realPart, imagPart;
+
+  nr = (double) nn;
+  if (k >= nn/2){
+    return 0.0; // out of range
+  }
+  if (k == 0){
+    return sqrt(data[0] * data[0] + data[1] * data[1]) / nr;
+  }
+  realPart = fabs(data[2*k])   + fabs(data[2*nn-2*k]);
+  imagPart = fabs(data[2*k+1]) + fabs(data[2*nn-2*k+1]);
+  return  sqrt(realPart * realPart + imagPart * imagPart) / nr;
+}
+
+//-----------------------------------------------------------
+// Calculates the FFT magnitude in db full scale at a given frequency index. 
+// Input: data is complex FFT Re[V(0)],Im[V(0)], Re[V(1)],Im[V(1)],...
+// Input: nn is the number of points in the data and in the FFT, 
+//           nn must be a power of 2
+// Input: k is frequency index 0 to nn/2-1
+//        E.g., if nn=16384, then k can be 0 to 8191
+// Input: fullScale is the largest possible component in volts
+// Output: Magnitude in db full scale at this frequency
+// data is an array of 2*nn elements
+// returns -200 if k >= nn/2
+double fftMagdB(double data[], unsigned long nn, unsigned long k, double fullScale){
+  double magnitude = fftMagnitude(data, nn, k);
+  if (magnitude<0.0000000001){ // less than 0.1 nV
+    return -200; // out of range
+  }
+  return 20.0*log10(magnitude/fullScale);
+}
+
+//-----------------------------------------------------------
+// Calculates the FFT phase at a given frequency index. 
+// Input: data is complex FFT Re[V(0)],Im[V(0)], Re[V(1)],Im[V(1)],...
+// Input: nn is the number of points in the data and in the FFT, 
+//           nn must be a power of 2
+// Input: k is frequency index 0 to nn/2-1
+//        E.g., if nn=16384, then k can be 0 to 8191
+// Output: Phase at this frequency
+// data is an array of 2*nn elements
+// returns 0 if k >= nn/2
+double fftPhase(double data[], unsigned long nn, unsigned long k){
+  if (k >= nn/2){
+    return 0.0;     // out of range
+  }
+  if (data[2*k+1]==0.0){
+    return 0.0;     // imaginary part is zero
+  }
+  if (data[2*k]==0.0){ // real part is zero
+    if (data[2*k+1]>0.0){ // real part is zero
+      return 1.5707963267948966192313216916398;    // 90 degrees
+    }
+    else{
+      return -1.5707963267948966192313216916398;   // -90 degrees
+    }
+  }
+  return atan2 (data[2*k+1], data[2*k]);  // imaginary part over real part
+}
+
+//-----------------------------------------------------------
+// Calculates equivalent frequency in Hz at a given frequency index. 
+// Input: fs is sampling rate in Hz
+// Input: nn is the number of points in the data and in the FFT, 
+//           nn must be a power of 2
+// Input: k is frequency index 0 to nn-1
+//        E.g., if nn=16384, then k can be 0 to 16383
+// Output: Equivalent frequency in Hz
+// returns 0 if k >= nn
+double fftFrequency (unsigned long nn, unsigned long k, double fs){
+  if (k >= nn){
+    return 0.0;     // out of range
+  }
+
+  if (k <= nn/2){
+    return fs * (double)k / (double)nn;
+  }
+  return -fs * (double)(nn-k)/ (double)nn;
+}
 
