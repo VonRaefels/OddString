@@ -117,7 +117,7 @@ double xAvarage;
 double xAvaragePrev;
 double xAvaragePrevPrev;
 double xDetected;
-const double FIXED_THR_DELTA = 10;
+const double FIXED_THR_DELTA = 300;
 const double ADAPT_THR_LAMBDA = 1;
 double detectedPrev;
 double detectedPrevPrev;
