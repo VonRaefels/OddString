@@ -252,9 +252,6 @@ void readSensors() {
   piezoDataIndex = detectPiezoOnset(PIN_PIEZO_INDEX);
   piezoDataThumb = detectPiezoOnset(PIN_PIEZO_THUMB);
 
-  piezoVal = map(piezoVal, PIEZO_THRESHOLD_ON, 1023, 0, 127);         // adapt the analog value to the midi range
-  piezoVal = constrain(piezoVal, piezoMinVelocity, 127); // adapt the value to the empirical range
-
   /* Softpot */
   int val = readSoftpotVal();
   
