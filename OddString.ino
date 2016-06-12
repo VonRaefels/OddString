@@ -108,23 +108,24 @@ struct piezoData piezoDataIndex, piezoDataThumb;
 // DSP VARIABLE
 
 const int FS = 10000;
-const uint16_t nFFT = 128;
+const uint16_t nFFT = 256;
 const uint16_t nWindow = nFFT/2;
 double frame[2*nWindow];
 double vFFT[nFFT];
-double xEnergy;
-double xAvarage;
-double xAvaragePrev;
-double xAvaragePrevPrev;
-double xDetected;
-const double FIXED_THR_DELTA = 300;
+double xEnergy = 0;
+double xAvarage = 0;
+double xAvaragePrev = 0;
+double xAvaragePrevPrev = 0;
+double xAvaragePrevPrevPrev = 0;
+double xDetected = 0;
+const double FIXED_THR_DELTA = 50;
 const double ADAPT_THR_LAMBDA = 1;
-double detectedPrev;
-double detectedPrevPrev;
-double xThresh;
-double xLocMax;
-double xLocMaxPrev;
-double xLocMaxPrevPrev;
+double detectedPrev = 0;
+double detectedPrevPrev = 0;
+double xThresh = 0;
+double xLocMax = 0;
+double xLocMaxPrev = 0;
+double xLocMaxPrevPrev = 0;
 
 
 
@@ -144,9 +145,9 @@ int fretDefs[13];
 int F0 = 220;
 
 /* DEBUG */
-boolean debugFrets = true;
-boolean debugSoftPot = true;
-boolean debugPiezo = false;
+boolean debugFrets = false;
+boolean debugSoftPot = false;
+boolean debugPiezo = true;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
 boolean debugPickNotes = false;
@@ -296,7 +297,7 @@ int readSoftpotVal() {
 
 struct piezoData detectPiezoOnset(int PIEZO) {
   struct piezoData piezoData_instance;
-    // Collect the raw data and perform zeropadding
+  // Collect the raw data and perform zeropadding
   for (int i = 0; i < nWindow*2; i++) {
     if(i > nWindow) {
       frame[i] = 0;
@@ -310,36 +311,44 @@ struct piezoData detectPiezoOnset(int PIEZO) {
   // ENERGY
   double xEnergy = 0;
   for (int i = 0; i < 2*nWindow; i += 2) {
-    xEnergy += (pow(frame[i], 2) + pow(frame[i+1], 2));
+    xEnergy += ((pow(frame[i], 2) + pow(frame[i+1], 2)))/(FS*nFFT);
   }
 
   // MOVING AVARAGE
-  xAvarage = (xEnergy + xAvaragePrev + xAvaragePrevPrev)/3;
+  xAvarage = (xEnergy + xAvaragePrev + xAvaragePrevPrev + xAvaragePrevPrevPrev)/4;
+  xAvaragePrevPrevPrev = xAvaragePrevPrev;
   xAvaragePrevPrev = xAvaragePrev;
-  xAvaragePrev = xAvarage;
+  xAvaragePrev = xEnergy;
 
   // ADAPTIVE THRESHOLDING
   xDetected = FIXED_THR_DELTA + ADAPT_THR_LAMBDA*(xAvarage + detectedPrev + detectedPrevPrev)/3;
   detectedPrevPrev = detectedPrev;
-  detectedPrev = xDetected;
+  detectedPrev = xAvarage;
 
   xThresh = xAvarage - xDetected;
 
   if (xThresh < 0){
     xThresh = 0;
   }
-  if(debugPiezo) {
-    Serial.println(String(piezoVal) + ", " + String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected));
-  }
   
   xLocMax = xThresh;
 
   if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
-    piezoVal = xLocMaxPrev;
+      piezoData_instance.energy = xLocMaxPrev;
+    piezoData_instance.on = true;
+  } else {
+    piezoData_instance.energy = 0;
+    piezoData_instance.on = false;
   }
-  //TO DO set output...
-  piezoData_instance.on = false;
-  piezoData_instance.energy = 0;
+  
+  xLocMaxPrevPrev = xLocMaxPrev;
+  xLocMaxPrev = xLocMax;
+ 
+
+  if(debugPiezo) {
+    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( piezoData_instance.energy) );
+  }
+
   return piezoData_instance;
 }
 
