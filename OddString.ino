@@ -144,8 +144,8 @@ int fretDefs[13];
 int F0 = 220;
 
 /* DEBUG */
-boolean debugFrets = false;
-boolean debugSoftPot = false;
+boolean debugFrets = true;
+boolean debugSoftPot = true;
 boolean debugPiezo = false;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
@@ -226,6 +226,9 @@ void loop() {
   
   if (doesSoftpotActAsString) {
     determineFrets();
+    if(fretTouched == numFrets) {
+      fretTouched = 0;
+    }
     if (debugFrets) {
       Serial.println("Fret touched: " + String(fretTouched));
     }
@@ -257,12 +260,12 @@ void readSensors() {
   
     //if the string is touched
   if (val > 0) {
-    if (debugSoftPot) {
-      Serial.println("SoftPot Val:  " + String(val));
-    }
     softpotActive = true;
     softpotVal = map(val, calibrationMin, calibrationMax, 0, 255);
     softpotVal = constrain(softpotVal, 0, 255);
+    if (debugSoftPot) {
+      Serial.println("SoftPot Val:  " + String(softpotVal));
+    }
   } else {
     softpotActive = false;
     softpotVal = 0;
@@ -430,7 +433,7 @@ void calibrate() {
 
 void determineFrets() {
 //check for open strings
-//  if (softpotVal >= F0) {
+//  if (softpotVal <) {
 //    softpotValOld = softpotVal;
 //    fretTouched = 0;
 //  }
@@ -456,7 +459,7 @@ void determineFrets() {
 
 void pickNotes() {
   if (piezoDataIndex.on) {
-    noteFretted = fretTouched + 52 - 1;
+    noteFretted = fretTouched + 52;
     if (stringActive) {
       if (debugPickNotes) {
         Serial.println("Deactivating String: " + String(activeNote->number()));
