@@ -109,9 +109,12 @@ int lastFretTouched = 0;
 int noteFretted;
 boolean isSoftpotActived = false;
 boolean isSoftpotPlucked = false;
+boolean legato = false;
 int calibrationMin = 0;
 int calibrationMax = 1023;
 int calibrationZ = 0;
+int refPiezoMode = 0;
+int capacitivePiezoValue = 0;
 
 int numFrets = 13;
 int fretDefs[13];
@@ -121,7 +124,7 @@ int F0 = 220;
 boolean debugFrets = false;
 boolean debugSoftPot = false;
 boolean isCalibrating = false;
-boolean debugPickNotes = true;
+boolean debugPickNotes = false;
 boolean debugTime = false;
 
 // the played note (usefull for open-string note)
@@ -131,6 +134,13 @@ boolean stringPlucked = false;
 
 // midi proprieties
 byte channel = 0x94; // arbitrary MIDI channel -- change as desired
+
+/** MAIN LOOP **/
+int meanPiezoMode;
+const int maxPiezoCounter = 60;
+int piezoCounter = maxPiezoCounter;
+
+int currentLED = PIN_LED_RED;
 
 
 /** SET UP **/
@@ -173,16 +183,19 @@ void setup() {
   /* calibration */
   if (isCalibrating) {
     calibrate();
+  } else {
+    digitalWrite(currentLED, HIGH);
+    
+    int aux = 0;
+    for(int i = 0; i < 20; i++) {
+      aux += analogRead(PIN_PIEZO_MODE);
+    }
+  
+    refPiezoMode = aux / 20;
   }
-
-  //  for (int x = 0; x < 2; x++) {
-  //    calibrationZ = analogRead(PIN_ACCEL_Z);
-  //  }
-  digitalWrite(PIN_LED_RED, HIGH);
 
 }
 
-/** MAIN LOOP **/
 void loop() {
   if (isCalibrating) {
     return;
@@ -194,9 +207,24 @@ void loop() {
   //rawPiezoVal = 0;
 
   readSensors();
-
-  if (thumbEnergy > 0) {
-    doesSoftpotActAsString = !doesSoftpotActAsString;
+  if(piezoCounter == 0) {
+    int mean = meanPiezoMode / maxPiezoCounter;
+    Serial.println(mean);
+    if(mean > 250) {
+      doesSoftpotActAsString = !doesSoftpotActAsString;
+      digitalWrite(currentLED, LOW);
+      if(currentLED == PIN_LED_BLUE) {
+        currentLED = PIN_LED_RED;
+      }else {
+        currentLED = PIN_LED_BLUE;
+      }
+      digitalWrite(currentLED, HIGH);
+    }
+    piezoCounter = maxPiezoCounter;
+    meanPiezoMode = 0;
+  }else {
+    meanPiezoMode += capacitivePiezoValue;
+    piezoCounter--;
   }
 
   if (doesSoftpotActAsString) {
@@ -212,7 +240,7 @@ void loop() {
 
     cleanUp();
   } else {
-    int val = map(softpotVal, 0, 255, 8192, 16383);
+    int val = map(softpotVal, 0, 255, 0, 16383);
     pitchBend(val);
 
   }
@@ -224,7 +252,9 @@ void loop() {
 
 /** FUNCTIONS **/
 void readSensors() {
-  /* Accelerometer */
+  /* Piezo 0 */
+  capacitivePiezoValue = analogRead(PIN_PIEZO_MODE);
+  //Serial.println(capacitivePiezoValue);
 
   /* Piezo */
   indexEnergy = indexPiezo.detectOnset();
@@ -254,7 +284,7 @@ void readSensors() {
 
 int readSoftpotVal() {
   int total = 0;
-  int n = 20;
+  int n = 10;
   int measures[n];
   int _softpotVal = 0;
   for (int i = 0; i < n; i++) {
@@ -264,8 +294,8 @@ int readSoftpotVal() {
 
   qsort(measures, n, sizeof(int), cmpfunc);
 
-  int offset = 5;
-  int limit = n - 5;
+  int offset = 2;
+  int limit = n - 2;
   for (int j = 0; j < limit; j++) {
     total += measures[j + offset];
   }
@@ -282,15 +312,15 @@ int cmpfunc (const void * a, const void * b)
 
 void calibrate() {
   Serial.println("Activating leds..");
-  digitalWrite(PIN_LED_BLUE, HIGH);
+  digitalWrite(PIN_LED_GREEN, HIGH);
   delay(100);
-  digitalWrite(PIN_LED_BLUE, LOW);
+  digitalWrite(PIN_LED_GREEN, LOW);
   delay(100);
-  digitalWrite(PIN_LED_BLUE, HIGH);
+  digitalWrite(PIN_LED_GREEN, HIGH);
   delay(100);
-  digitalWrite(PIN_LED_BLUE, LOW);
+  digitalWrite(PIN_LED_GREEN, LOW);
   delay(100);
-  digitalWrite(PIN_LED_BLUE, HIGH);
+  digitalWrite(PIN_LED_GREEN, HIGH);
 
   int sensorMax = 1000;
   int sensorMin = 0;
@@ -306,7 +336,7 @@ void calibrate() {
 
     while (!response) {
       //read piezo val
-      int piezoVal = analogRead(piezoPins[0]);
+      int piezoVal = analogRead(PIN_PIEZO_MODE);
 
       //get the sensor min value (highest fret) on the first round
       if (j == numFrets) {
@@ -336,11 +366,11 @@ void calibrate() {
     }
 
     //write to memory
-    digitalWrite(PIN_LED_BLUE, LOW);
+    digitalWrite(PIN_LED_GREEN, LOW);
     EEPROM.write(j, val);
 
     delay(100);
-    digitalWrite(PIN_LED_BLUE, HIGH);
+    digitalWrite(PIN_LED_GREEN, HIGH);
   }
 
   //update global definitions
@@ -350,7 +380,7 @@ void calibrate() {
     fretDefs[j] = EEPROM.read(j);
   }
 
-  digitalWrite(PIN_LED_BLUE, LOW);
+  digitalWrite(PIN_LED_GREEN, LOW);
   Serial.println("Calibration completed!");
 }
 
@@ -409,16 +439,16 @@ void pickNotes() {
 
     stringPlucked = true;
   } else {
-    if ((lastFretTouched != fretTouched) && stringActive) {
-      noteOff(activeNote->number(), 0);
+    int previousNote = activeNote->number();
+    if ((lastFretTouched != fretTouched) && stringActive && legato) {
       free(activeNote);
       if (fretTouched > 0) {
-
         noteFretted = fretTouched + 52;
         activeNote = (Note *) malloc(sizeof(Note));
 
         activeNote->init(noteFretted, velocity, millis(), fretTouched > 0);
         noteOn(activeNote->number(), activeNote->velocity());
+        
 
         if (debugPickNotes) {
           Serial.println("Legato fret: " + String(activeNote->number()));
@@ -426,6 +456,7 @@ void pickNotes() {
       }else {
         stringActive = false;
       }
+      noteOff(previousNote, 0);
     }
   }
 }
@@ -471,5 +502,5 @@ void noteOff(int pitch, int velocity) {
 }
 
 void pitchBend(int value) {
-  //  usbMIDI.sendPitchBend(value, MIDI_CHANNEL);
+  usbMIDI.sendPitchBend(value, MIDI_CHANNEL);
 }
