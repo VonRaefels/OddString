@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <EEPROM.h>
 #include <math.h>
-
+#include "PiezoData.h"
 
 #define PADDING 3
 
@@ -53,10 +53,8 @@ class Note {
     }
 };
 
-struct piezoData {
-  boolean on;
-  int energy;
-};
+
+
 
 
 /** CONSTANT **/
@@ -103,8 +101,9 @@ byte padIndex = 0;  // index for pads throught each loop
 boolean softpotActive = true;
 boolean doesSoftpotActAsString = true;
 int piezoMinVelocity = 0;
-struct piezoData piezoDataIndex, piezoDataThumb;
 
+int indexEnergy = 0;
+int thumbEnergy = 0;
 // DSP VARIABLE
 
 const int FS = 10000;
@@ -147,10 +146,10 @@ int F0 = 220;
 /* DEBUG */
 boolean debugFrets = false;
 boolean debugSoftPot = false;
-boolean debugPiezo = true;
+boolean debugPiezo = false;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
-boolean debugPickNotes = false;
+boolean debugPickNotes = true;
 boolean debugTime = false;
 
 // the played note (usefull for open-string note)
@@ -206,6 +205,7 @@ void setup() {
   for (int x = 0; x < 2; x++) {
     calibrationZ = analogRead(PIN_ACCEL_Z);
   }
+
 }
 
 /** MAIN LOOP **/
@@ -221,7 +221,7 @@ void loop() {
 
   readSensors();
 
-  if(piezoDataThumb.on) {
+  if(thumbEnergy > 0) {
     doesSoftpotActAsString = !doesSoftpotActAsString;
   }
   
@@ -253,9 +253,9 @@ void readSensors() {
   /* Accelerometer */
 
   /* Piezo */
-  piezoDataIndex = detectPiezoOnset(PIN_PIEZO_INDEX);
-  piezoDataThumb = detectPiezoOnset(PIN_PIEZO_THUMB);
-
+  indexEnergy = detectPiezoOnset();
+  
+  //thumbEnergy = detectPiezoOnset2();
   /* Softpot */
   int val = readSoftpotVal();
   
@@ -295,14 +295,14 @@ int readSoftpotVal() {
   return mean;
 }
 
-struct piezoData detectPiezoOnset(int PIEZO) {
-  struct piezoData piezoData_instance;
+int detectPiezoOnset() {
+  int output = 0;
   // Collect the raw data and perform zeropadding
   for (int i = 0; i < nWindow*2; i++) {
     if(i > nWindow) {
       frame[i] = 0;
     }else {
-      frame[i] = analogRead(PIEZO);
+      frame[i] = analogRead(PIN_PIEZO_INDEX);
     }
   }
   
@@ -334,11 +334,9 @@ struct piezoData detectPiezoOnset(int PIEZO) {
   xLocMax = xThresh;
 
   if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
-      piezoData_instance.energy = xLocMaxPrev;
-    piezoData_instance.on = true;
+    output = xLocMaxPrev;
   } else {
-    piezoData_instance.energy = 0;
-    piezoData_instance.on = false;
+    output = 0;
   }
   
   xLocMaxPrevPrev = xLocMaxPrev;
@@ -346,10 +344,63 @@ struct piezoData detectPiezoOnset(int PIEZO) {
  
 
   if(debugPiezo) {
-    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( piezoData_instance.energy) );
+    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( output ));
+  }
+  return output;
+}
+
+int detectPiezoOnset2() {
+  int output = 0;
+  // Collect the raw data and perform zeropadding
+  for (int i = 0; i < nWindow*2; i++) {
+    if(i > nWindow) {
+      frame[i] = 0;
+    }else {
+      frame[i] = analogRead(PIN_PIEZO_THUMB);
+    }
+  }
+  
+  fft(frame, nWindow);
+    
+  // ENERGY
+  double xEnergy = 0;
+  for (int i = 0; i < 2*nWindow; i += 2) {
+    xEnergy += ((pow(frame[i], 2) + pow(frame[i+1], 2)))/(FS*nFFT);
   }
 
-  return piezoData_instance;
+  // MOVING AVARAGE
+  xAvarage = (xEnergy + xAvaragePrev + xAvaragePrevPrev + xAvaragePrevPrevPrev)/4;
+  xAvaragePrevPrevPrev = xAvaragePrevPrev;
+  xAvaragePrevPrev = xAvaragePrev;
+  xAvaragePrev = xEnergy;
+
+  // ADAPTIVE THRESHOLDING
+  xDetected = FIXED_THR_DELTA + ADAPT_THR_LAMBDA*(xAvarage + detectedPrev + detectedPrevPrev)/3;
+  detectedPrevPrev = detectedPrev;
+  detectedPrev = xAvarage;
+
+  xThresh = xAvarage - xDetected;
+
+  if (xThresh < 0){
+    xThresh = 0;
+  }
+  
+  xLocMax = xThresh;
+
+  if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
+    output = xLocMaxPrev;
+  } else {
+    output = 0;
+  }
+  
+  xLocMaxPrevPrev = xLocMaxPrev;
+  xLocMaxPrev = xLocMax;
+ 
+
+  if(debugPiezo) {
+    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( output ));
+  }
+  return output;
 }
 
 int cmpfunc (const void * a, const void * b)
@@ -357,15 +408,8 @@ int cmpfunc (const void * a, const void * b)
   return ( *(int*)a - * (int*)b );
 }
 
-void sendNote() {
-  if (softpotActive) {
-    noteOn(softpotVal, 100);
-    softpotActive = false;
-  }
-  else return;
-}
 
-const int CALIBRATE_PIEZO_THRESHOLD = 700;
+const int CALIBRATE_PIEZO_THRESHOLD = 450;
 void calibrate() {
   Serial.println("Activating leds..");
   digitalWrite(PIN_LED_BLUE, HIGH);
@@ -467,11 +511,11 @@ void determineFrets() {
 }
 
 void pickNotes() {
-  if (piezoDataIndex.on) {
+  if (indexEnergy > 0) {
     noteFretted = fretTouched + 52;
     if (stringActive) {
       if (debugPickNotes) {
-        Serial.println("Deactivating String: " + String(activeNote->number()));
+        Serial.println("Deactivating fret: " + String(activeNote->number()));
       }
       noteOff(activeNote->number(), 0);
       free(activeNote);
@@ -480,9 +524,12 @@ void pickNotes() {
     }
     //register with active notes
     activeNote = (Note *) malloc(sizeof(Note));
-    activeNote->init(noteFretted, piezoVal, millis(), fretTouched > 0);
+    int velocity = map(indexEnergy, 0, 200, 0, 127);
+    velocity = constrain(velocity, 0, 127); 
+    
+    activeNote->init(noteFretted, velocity, millis(), fretTouched > 0);
     if (debugPickNotes) {
-      Serial.println("Activating String: " + String(activeNote->number()));
+      Serial.println("Activating fret: " + String(activeNote->number()));
     }
 
     noteOn(activeNote->number(), activeNote->velocity());
@@ -509,7 +556,9 @@ void cleanUp() {
     else {
       //turn off the active note
       noteOff(activeNote->number(), 0);
-
+      if (debugPickNotes) {
+        Serial.println("Deactivating fret: " + String(activeNote->number()));
+      }
       //mark as inactive
       stringActive = false;
       free(activeNote);
@@ -519,12 +568,12 @@ void cleanUp() {
 
 /* MIDI functions */
 void noteOn(int pitch, int velocity) {
-  //  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
   //Serial.println(">>>ON!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
 
 void noteOff(int pitch, int velocity) {
-  //  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
+  usbMIDI.sendNoteOn(pitch, velocity, MIDI_CHANNEL);
   //Serial.println(">>>OFF!  pitch: " + String(pitch) + ", " + " velocity: " + String(velocity));
 }
 
