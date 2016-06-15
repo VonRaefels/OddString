@@ -67,6 +67,7 @@ const int PIN_LED_RED = 8;
 // sensors proprieties
 int PIEZO_THRESHOLD_ON = 250;
 int PIEZO_SAMPLES = 400;
+const int CALIBRATE_PIEZO_THRESHOLD = 450;
 
 int MIDI_CHANNEL = 0x94;
 int SOFTPOT_THRESHOLD_ON = 7;
@@ -123,6 +124,7 @@ double xLocMaxPrevPrev = 0;
 int softpotVal = 0;
 int softpotValOld = 0;
 int fretTouched;
+int lastFretTouched = 0;
 int noteFretted;
 boolean isSoftpotActived = false;
 boolean isSoftpotPlucked = false;
@@ -140,7 +142,7 @@ boolean debugSoftPot = false;
 boolean debugPiezo = false;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
-boolean debugPickNotes = true;
+boolean debugPickNotes = false;
 boolean debugTime = false;
 
 // the played note (usefull for open-string note)
@@ -246,7 +248,12 @@ void readSensors() {
   /* Piezo */
   indexEnergy = detectPiezoOnset();
 
-  //thumbEnergy = detectPiezoOnset2();
+  thumbEnergy = analogRead(PIN_PIEZO_THUMB);
+  
+  if(thumbEnergy > CALIBRATE_PIEZO_THRESHOLD) {
+    Serial.println("thumb");
+  }
+
   /* Softpot */
   int val = readSoftpotVal();
 
@@ -352,7 +359,6 @@ int cmpfunc (const void * a, const void * b)
 }
 
 
-const int CALIBRATE_PIEZO_THRESHOLD = 450;
 void calibrate() {
   Serial.println("Activating leds..");
   digitalWrite(PIN_LED_BLUE, HIGH);
@@ -428,6 +434,7 @@ void calibrate() {
 }
 
 void determineFrets() {
+  lastFretTouched = fretTouched;
   //check for open strings
   //  if (softpotVal <) {
   //    softpotValOld = softpotVal;
@@ -478,6 +485,21 @@ void pickNotes() {
     noteOn(activeNote->number(), activeNote->velocity());
 
     stringPlucked = true;
+  }else {
+    if((lastFretTouched != fretTouched) && stringActive) {
+      noteOff(activeNote->number(), 0);
+      free(activeNote);
+      
+      noteFretted = fretTouched + 52;
+      activeNote = (Note *) malloc(sizeof(Note));
+      int velocity = map(indexEnergy, 0, 200, 0, 127);
+      velocity = constrain(velocity, 0, 127);
+  
+      activeNote->init(noteFretted, velocity, millis(), fretTouched > 0);
+      if(debugPickNotes) {
+        Serial.println("Legato fret: " + String(activeNote->number()));
+      }
+    }
   }
 }
 
