@@ -51,10 +51,6 @@ class Note {
     }
 };
 
-
-
-
-
 /** CONSTANT **/
 // sensors pins
 const int PIN_SOFTPOT = 5;
@@ -108,7 +104,7 @@ const int FS = 10000;
 const uint16_t nFFT = 128;
 const uint16_t nWindow = nFFT / 2;
 const double FIXED_THR_DELTA = 15;
-const double ADAPT_THR_LAMBDA = 2;
+const double ADAPT_THR_LAMBDA = 1.1;
 double xEnergy = 0;
 double xAvarage = 0;
 double xAvaragePrev = 0;
@@ -144,7 +140,7 @@ boolean debugSoftPot = false;
 boolean debugPiezo = false;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
-boolean debugPickNotes = false;
+boolean debugPickNotes = true;
 boolean debugTime = false;
 
 // the played note (usefull for open-string note)
