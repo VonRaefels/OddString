@@ -111,7 +111,6 @@ const int FS = 10000;
 const uint16_t nFFT = 256;
 const uint16_t nWindow = nFFT/2;
 double frame[2*nWindow];
-double vFFT[nFFT];
 double xEnergy = 0;
 double xAvarage = 0;
 double xAvaragePrev = 0;
@@ -147,7 +146,8 @@ int F0 = 220;
 /* DEBUG */
 boolean debugFrets = false;
 boolean debugSoftPot = false;
-boolean debugPiezo = true;
+boolean debugPiezo = false;
+boolean piezoRawDebug = true;
 boolean debugPiezo2 = false;
 boolean isCalibrating = false;
 boolean debugPickNotes = false;
@@ -213,13 +213,16 @@ void loop() {
   if (isCalibrating) {
     return;
   }
-
+  
   /* RESET */
   stringPlucked = false;
   piezoVal = false;
   //rawPiezoVal = 0;
 
-  readSensors();
+  if (piezoRawDebug) {
+    Serial.println(String(analogRead(PIN_PIEZO_INDEX)));
+  }
+  //readSensors();
 
   if(piezoDataThumb.on) {
     doesSoftpotActAsString = !doesSoftpotActAsString;
