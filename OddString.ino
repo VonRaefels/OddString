@@ -9,8 +9,6 @@
 #include <stdlib.h>
 #include <EEPROM.h>
 #include <math.h>
-#include "PiezoData.h"
-
 #define PADDING 3
 
 
@@ -109,22 +107,8 @@ int thumbEnergy = 0;
 const int FS = 10000;
 const uint16_t nFFT = 256;
 const uint16_t nWindow = nFFT/2;
-double frame[2*nWindow];
-double vFFT[nFFT];
-double xEnergy = 0;
-double xAvarage = 0;
-double xAvaragePrev = 0;
-double xAvaragePrevPrev = 0;
-double xAvaragePrevPrevPrev = 0;
-double xDetected = 0;
 const double FIXED_THR_DELTA = 50;
 const double ADAPT_THR_LAMBDA = 1;
-double detectedPrev = 0;
-double detectedPrevPrev = 0;
-double xThresh = 0;
-double xLocMax = 0;
-double xLocMaxPrev = 0;
-double xLocMaxPrevPrev = 0;
 
 
 
@@ -202,9 +186,9 @@ void setup() {
     calibrate();
   }
 
-  for (int x = 0; x < 2; x++) {
-    calibrationZ = analogRead(PIN_ACCEL_Z);
-  }
+//  for (int x = 0; x < 2; x++) {
+//    calibrationZ = analogRead(PIN_ACCEL_Z);
+//  }
 
 }
 
@@ -296,7 +280,24 @@ int readSoftpotVal() {
 }
 
 int detectPiezoOnset() {
-  int output = 0;
+  /* INIT */
+  int out = 0;
+  double frame[2*nWindow];
+  double vFFT[nFFT];
+  double xEnergy = 0;
+  double xAvarage = 0;
+  double xAvaragePrev = 0;
+  double xAvaragePrevPrev = 0;
+  double xAvaragePrevPrevPrev = 0;
+  double xDetected = 0;
+  double detectedPrev = 0;
+  double detectedPrevPrev = 0;
+  double xThresh = 0;
+  double xLocMax = 0;
+  double xLocMaxPrev = 0;
+  double xLocMaxPrevPrev = 0;
+  /* END INIT */
+  
   // Collect the raw data and perform zeropadding
   for (int i = 0; i < nWindow*2; i++) {
     if(i > nWindow) {
@@ -308,8 +309,6 @@ int detectPiezoOnset() {
   
   fft(frame, nWindow);
     
-  // ENERGY
-  double xEnergy = 0;
   for (int i = 0; i < 2*nWindow; i += 2) {
     xEnergy += ((pow(frame[i], 2) + pow(frame[i+1], 2)))/(FS*nFFT);
   }
@@ -334,9 +333,9 @@ int detectPiezoOnset() {
   xLocMax = xThresh;
 
   if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
-    output = xLocMaxPrev;
+    out = xLocMaxPrev;
   } else {
-    output = 0;
+    out = 0;
   }
   
   xLocMaxPrevPrev = xLocMaxPrev;
@@ -344,64 +343,11 @@ int detectPiezoOnset() {
  
 
   if(debugPiezo) {
-    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( output ));
+    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( out ));
   }
-  return output;
+  return out;
 }
 
-int detectPiezoOnset2() {
-  int output = 0;
-  // Collect the raw data and perform zeropadding
-  for (int i = 0; i < nWindow*2; i++) {
-    if(i > nWindow) {
-      frame[i] = 0;
-    }else {
-      frame[i] = analogRead(PIN_PIEZO_THUMB);
-    }
-  }
-  
-  fft(frame, nWindow);
-    
-  // ENERGY
-  double xEnergy = 0;
-  for (int i = 0; i < 2*nWindow; i += 2) {
-    xEnergy += ((pow(frame[i], 2) + pow(frame[i+1], 2)))/(FS*nFFT);
-  }
-
-  // MOVING AVARAGE
-  xAvarage = (xEnergy + xAvaragePrev + xAvaragePrevPrev + xAvaragePrevPrevPrev)/4;
-  xAvaragePrevPrevPrev = xAvaragePrevPrev;
-  xAvaragePrevPrev = xAvaragePrev;
-  xAvaragePrev = xEnergy;
-
-  // ADAPTIVE THRESHOLDING
-  xDetected = FIXED_THR_DELTA + ADAPT_THR_LAMBDA*(xAvarage + detectedPrev + detectedPrevPrev)/3;
-  detectedPrevPrev = detectedPrev;
-  detectedPrev = xAvarage;
-
-  xThresh = xAvarage - xDetected;
-
-  if (xThresh < 0){
-    xThresh = 0;
-  }
-  
-  xLocMax = xThresh;
-
-  if ((xLocMax-xLocMaxPrev)<0 && (xLocMaxPrev-xLocMaxPrevPrev)>0) {
-    output = xLocMaxPrev;
-  } else {
-    output = 0;
-  }
-  
-  xLocMaxPrevPrev = xLocMaxPrev;
-  xLocMaxPrev = xLocMax;
- 
-
-  if(debugPiezo) {
-    Serial.println(String(xEnergy) + ", " + String(xAvarage) + ", " + String(xDetected) + ", " + String( output ));
-  }
-  return output;
-}
 
 int cmpfunc (const void * a, const void * b)
 {
